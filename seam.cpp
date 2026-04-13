@@ -341,7 +341,7 @@ public:
     
     Image* img = nullptr;
     Vector2 imgOrigSize;    // full resolution image size before scaling and carving
-    Vector2 imgOrigScaled;  
+    Rectangle origFrame;  
     Vector2 imgSize;        // full resolution image size after carving
     Vector2 imgScaledSize;  // displayed image size
     Vector2 imgPos;         // position of top left corner
@@ -376,7 +376,7 @@ public:
 
         setFrameSize();
         imgOrigSize = frameSize;
-        imgOrigScaled = frameSize;
+        origFrame = {edgeBuffer, edgeBuffer, frameSize.x, frameSize.y};
         imgSize = frameSize;
         imgScale = 1;
         imgScaledSize = frameSize;
@@ -396,18 +396,23 @@ public:
             float xScale = frameSize.x / imgOrigSize.x;
             float yScale = frameSize.y / imgOrigSize.y;
             imgScale = (xScale < yScale) ? xScale : yScale;
-            imgOrigScaled = {imgOrigSize.x*imgScale, imgOrigSize.y*imgScale};
+
+            origFrame.width = imgOrigSize.x*imgScale;
+            origFrame.height = imgOrigSize.y*imgScale;
+
+            float x = edgeBuffer + (frameSize.x - origFrame.width) / 2.0f;
+            if (x<edgeBuffer) {x=edgeBuffer;}
+            origFrame.x = x;
+
+            float y = edgeBuffer + (frameSize.y - origFrame.height) / 2.0f;
+            if (y<edgeBuffer) {y=edgeBuffer;}
+            origFrame.y = y;
 
             // imgPos is based off carved image
             imgSize = {(float)img->width, (float)img->height};
             imgScaledSize = {imgSize.x*imgScale, imgSize.y*imgScale};
-            float x = edgeBuffer + (frameSize.x - imgOrigScaled.x) / 2.0f;
-            if (x<edgeBuffer) {x=edgeBuffer;}
 
-            float y = edgeBuffer + (frameSize.y - imgOrigScaled.y) / 2.0f;
-            if (y<edgeBuffer) {y=edgeBuffer;}
-
-            imgPos = {x, y};
+            imgPos = {origFrame.x, origFrame.y + origFrame.height - imgScaledSize.y};
         }
     }
 
@@ -416,14 +421,14 @@ public:
     }
 
     void updateSliders() {
-        rectXSlider = {edgeBuffer + (frameSize.x - imgOrigScaled.x)/2,
-                      (edgeBuffer + frameSize.y),
-                       imgOrigScaled.x,
+        rectXSlider = {origFrame.x,
+                       edgeBuffer + frameSize.y,
+                       origFrame.width,
                        sliderHeight};
-        rectYSlider = {(frameSize.x + edgeBuffer),
-                        edgeBuffer + frameSize.y - imgOrigScaled.y,
-                        sliderHeight,
-                        imgOrigScaled.y};
+        rectYSlider = {edgeBuffer + frameSize.x,
+                       origFrame.y,
+                       sliderHeight,
+                       origFrame.height};
     }
 
     void updateScreenSize() {
@@ -438,14 +443,10 @@ public:
 
 void ui_carve(UI_Size* ui, Image* origImage, Image* carvedImage, Texture2D* tex) {
     if (ui->img != nullptr) {
-        printf("xSlider: %f\n", ui->xSlider);
         int xSeams = (int)( (1-ui->xSlider) * origImage->width);
-        printf("xseams: %i\n", xSeams);
         *carvedImage = genImageCarved(origImage, xSeams, true);
 
-        printf("ySlider: %f\n", ui->ySlider);
         int ySeams = (int)( (1-ui->ySlider) * origImage->height);
-        printf("yseams: %i\n", ySeams);
         *carvedImage = genImageCarved(carvedImage, ySeams, false);
 
         ui->img = carvedImage;
@@ -461,10 +462,10 @@ int main(void) {
 
     const Color clrBG{130, 130, 130, 255};
     const Color clrLine{145, 200, 210, 255};
-    const unsigned int intClrLine = (clrLine.r*256*256*256 +
-                                     clrLine.g*256*256  +
-                                     clrLine.b*256   + 
-                                     clrLine.a);
+    const unsigned int intClrLine = (clrLine.r << 24 |
+                                     clrLine.g << 16 |
+                                     clrLine.b << 8  |
+                                     clrLine.a << 0);
 
     float lineThck = 2;
 
@@ -546,25 +547,20 @@ int main(void) {
             }
 
             // image frame
-            DrawRectangleLines(ui.edgeBuffer, ui.edgeBuffer, ui.frameSize.x, ui.frameSize.y, RED);
-            DrawRectangleLinesEx(Rectangle{(ui.edgeBuffer + (ui.frameSize.x - ui.imgOrigScaled.x) / 2.0f),
-                                            ui.edgeBuffer + ui.frameSize.y - ui.imgOrigScaled.y,
-                                            ui.imgOrigScaled.x,
-                                            ui.imgOrigScaled.y},
-                                 lineThck,
-                                 clrLine);
+            // DrawRectangleLines(ui.edgeBuffer, ui.edgeBuffer, ui.frameSize.x, ui.frameSize.y, RED);
+            DrawRectangleLinesEx(ui.origFrame, lineThck, clrLine);
 
             // draw image
             if (tex.width > 0) {
                 DrawTextureEx(tex, ui.imgPos, 0.0f, ui.imgScale, WHITE);
 
                 // draw lines from sliders around image
-                DrawLineEx({ui.imgPos.x + ui.imgScaledSize.x, ui.edgeBuffer + ui.frameSize.y - ui.imgOrigScaled.y},
-                           {ui.imgPos.x + ui.imgScaledSize.x, ui.imgOrigSize.y},
+                DrawLineEx({ui.origFrame.x + ui.imgScaledSize.x, ui.origFrame.y},
+                           {ui.origFrame.x + ui.imgScaledSize.x, ui.origFrame.y + ui.origFrame.height},
                            1.0,
                            clrLine);
-                DrawLineEx({ui.imgPos.x, ui.imgPos.y},
-                           {ui.edgeBuffer + ui.frameSize.x, ui.imgPos.y},
+                DrawLineEx({ui.origFrame.x, ui.imgPos.y},
+                           {ui.origFrame.x + ui.origFrame.width, ui.imgPos.y},
                            1.0,
                            clrLine); 
 
