@@ -171,7 +171,7 @@
         GuiWindowFileDialogState state = { 0 };
 
         // Init window data
-        state.windowBounds = (Rectangle){ GetScreenWidth()/2 - 440/2, GetScreenHeight()/2 - 310/2, 440, 310 };
+        state.windowBounds = (Rectangle){ (float)GetScreenWidth()/2 - 440/2, (float)GetScreenHeight()/2 - 310/2, 440, 310 };
         state.windowActive = false;
         state.supportDrag = true;
         state.dragMode = false;

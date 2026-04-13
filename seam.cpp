@@ -1,5 +1,4 @@
 #include <raylib.h> /* v6.0 */
-#include <stdio.h>
 
 #define RAYGUI_IMPLEMENTATION
 #include <raygui.h> /* v5.0 */
@@ -16,6 +15,121 @@
 #include <cfloat>
 #include <thread>
 
+class UI_Size {
+public:
+    Vector2 screenSize;     // window size
+    Vector2 frameSize;      // available region to display image
+    
+    Image* img = nullptr;
+    Vector2 imgOrigSize;    // full resolution image size before scaling and carving
+    Rectangle origFrame;  
+    Vector2 imgSize;        // full resolution image size after carving
+    Vector2 imgScaledSize;  // displayed image size
+    Vector2 imgPos;         // position of top left corner
+    float imgScale;
+
+    float edgeBuffer;       // blank space around window edge
+    float spacer;
+
+    float sliderHeight, sliderWidth;
+    float xSlider, ySlider;
+    Rectangle rectXSlider;
+    Rectangle rectYSlider;
+    
+    float btnHeight;
+    float btnWidth;
+    Rectangle rectBtnLoad;
+    Rectangle rectBtnSave;
+
+    UI_Size(float screenX, float screenY) {
+        screenSize.x = screenX;
+        screenSize.y = screenY;
+
+        // default values
+        edgeBuffer = 10;
+        spacer = 5;
+        sliderHeight = 20;   // for xSlider
+        sliderWidth = 8;     // for ySlider
+        btnHeight = 30;
+        btnWidth = 100;
+
+        xSlider = 1.0f;
+        ySlider = 1.0f;
+
+        setFrameSize();
+        imgOrigSize = frameSize;
+        origFrame = {edgeBuffer, edgeBuffer, frameSize.x, frameSize.y};
+        imgSize = frameSize;
+        imgScale = 1;
+        imgScaledSize = frameSize;
+
+        setButtonSize();
+        updateSliders();
+    }
+
+    void setFrameSize() {
+        frameSize = {screenSize.x - edgeBuffer - sliderHeight - edgeBuffer,
+                     screenSize.y - edgeBuffer - sliderHeight - spacer - btnHeight - spacer - edgeBuffer};
+    }
+
+    void setImageScale() {
+        if (img != nullptr) {
+            // scale is based off original uncarved size
+            float xScale = frameSize.x / imgOrigSize.x;
+            float yScale = frameSize.y / imgOrigSize.y;
+            imgScale = (xScale < yScale) ? xScale : yScale;
+
+            origFrame.width = imgOrigSize.x*imgScale;
+            origFrame.height = imgOrigSize.y*imgScale;
+
+            float x = edgeBuffer + (frameSize.x - origFrame.width) / 2.0f;
+            if (x<edgeBuffer) {x=edgeBuffer;}
+            origFrame.x = x;
+
+            float y = edgeBuffer + (frameSize.y - origFrame.height) / 2.0f;
+            if (y<edgeBuffer) {y=edgeBuffer;}
+            origFrame.y = y;
+
+            // imgPos is based off carved image
+            imgSize = {(float)img->width, (float)img->height};
+            imgScaledSize = {imgSize.x*imgScale, imgSize.y*imgScale};
+
+            imgPos = {origFrame.x, origFrame.y + origFrame.height - imgScaledSize.y};
+        }
+    }
+
+    void setButtonSize() {
+        rectBtnLoad = {((float)screenSize.x/2 - btnWidth - spacer), (screenSize.y - edgeBuffer - btnHeight), btnWidth, btnHeight};
+        rectBtnSave = {((float)screenSize.x/2 + spacer), (screenSize.y - edgeBuffer - btnHeight), btnWidth, btnHeight};
+    }
+
+    void updateSliders() {
+        rectXSlider = {origFrame.x,
+                       edgeBuffer + frameSize.y,
+                       origFrame.width,
+                       sliderHeight};
+        rectYSlider = {edgeBuffer + frameSize.x,
+                       origFrame.y,
+                       sliderHeight,
+                       origFrame.height};
+    }
+
+    void updateScreenSize() {
+        screenSize = {(float)GetScreenWidth(), (float)GetScreenHeight()};
+        setFrameSize();
+        setImageScale();
+        setButtonSize();
+        updateSliders();
+    }
+}; // end UI_Size
+
+/** Creates an array of 'energy values' for an image.
+ * 
+ * @colorArr: Array of pixels from Image.data
+ * @height: Image height
+ * @width: Image width
+ * @return: [height x width] array of energy values
+ */
 float* energyArray(Color* colorArr, int height, int width) {
     float* floatArr = new float[height*width]{};
 
@@ -61,6 +175,14 @@ float* energyArray(Color* colorArr, int height, int width) {
     return floatArr;
 } // end energyArray()
 
+/** Generates an Image showing pixel 'energy values'
+ * 
+ * @img_input: Original image
+ * @outputFloat: If true, the output image will use raw 32bit energy values.
+ * @grayscale: If true, the output image will be 8bit grayscale,
+ *              else the image will be in R8G8B8A8 format.
+ * @return: New Image
+ */
 Image genImageEnergy(Image* img_input, bool outputFloat, bool grayscale){
     if (img_input->format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8){
         printf("[ERROR] wrong pixel format: %i\n", img_input->format);
@@ -126,7 +248,15 @@ Image genImageEnergy(Image* img_input, bool outputFloat, bool grayscale){
     }
 } // genImageEnergy()
 
-// returns an array of the pixel indices to remove
+/** Creates an array of minimum energy pixel indices to remove.
+ * 
+ * @floatArr: array of energy values from energyArray()
+ * @height: Image height
+ * @width: Image width
+ * @xDir: If true, shrink image horizontally,
+ *          else shrink image vertically
+ * @return: array of pixel indices
+ */
 int* minIndex(float* floatArr, int height, int width, bool xDir){
     float* seamArr = floatArr;
     int* index;
@@ -236,6 +366,15 @@ int* minIndex(float* floatArr, int height, int width, bool xDir){
     return index;
 } // end minIndex()
 
+/** Generate an Image showing the seam of lowest energy.
+ * 
+ * @img_input: Original image
+ * @xDir: If true, shrink image horizontally,
+ *          else shrink image vertically
+ * @outputEnergy: If true, overlay the seam on energy values,
+ *                  else overlay seam on original image
+ * @return: New Image
+ */
 Image genImageSeam(Image* img_input, bool xDir, bool outputEnergy) {
     int height = img_input->height;
     int width = img_input->width;
@@ -268,6 +407,15 @@ Image genImageSeam(Image* img_input, bool xDir, bool outputEnergy) {
     return Image{(void*)colorArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
 } // end genImageSeam()
 
+/** Removes seams of lowest energy from image.
+ *
+ * @colorArr: Array of pixels from Image.data
+ * @height: Image height
+ * @width: Image width
+ * @xDir: If true, shrink image horizontally,
+ *          else shrink image vertically
+ * @return: Array of pixel colors
+ */
 Color* removeSeam(Color* colorArr, int height, int width, bool xDir) {
     float* energyArr = energyArray(colorArr, height, width);
     int* seamIndex = minIndex(energyArr, height, width, xDir);
@@ -317,6 +465,14 @@ Color* removeSeam(Color* colorArr, int height, int width, bool xDir) {
     return newColorArr;
 } // end removeSeam()
 
+/** Generate Image with removed seams
+ * 
+ * @img_input: Original image
+ * @seams: number of seams to remove
+ * @xDir: If true, shrink image horizontally,
+ *          else shrink image vertically
+ * @return: New Image
+ */
 Image genImageCarved(Image* img_input, int seams, bool xDir) {
     int height = img_input->height;
     int width = img_input->width;
@@ -333,116 +489,14 @@ Image genImageCarved(Image* img_input, int seams, bool xDir) {
     return Image{(void*)colorArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
 } // end genImageCarved()
 
-float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *textBottom, float value, float minValue, float maxValue, int sliderHeight);
-
-class UI_Size {
-public:
-    Vector2 screenSize;     // window size
-    Vector2 frameSize;      // available region to display image
-    
-    Image* img = nullptr;
-    Vector2 imgOrigSize;    // full resolution image size before scaling and carving
-    Rectangle origFrame;  
-    Vector2 imgSize;        // full resolution image size after carving
-    Vector2 imgScaledSize;  // displayed image size
-    Vector2 imgPos;         // position of top left corner
-    float imgScale;
-
-    float edgeBuffer;       // blank space around window edge
-    float spacer;
-
-    float sliderHeight, sliderWidth;
-    float xSlider, ySlider;
-    Rectangle rectXSlider;
-    Rectangle rectYSlider;
-    
-    float btnLoadHeight;
-    float btnLoadWidth;
-    Rectangle rectBtnLoad;
-
-    UI_Size(float screenX, float screenY) {
-        screenSize.x = screenX;
-        screenSize.y = screenY;
-
-        // default values
-        edgeBuffer = 10;
-        spacer = 5;
-        sliderHeight = 20;   // for xSlider
-        sliderWidth = 8;     // for ySlider
-        btnLoadHeight = 30;
-        btnLoadWidth = 100;
-
-        xSlider = 1.0f;
-        ySlider = 1.0f;
-
-        setFrameSize();
-        imgOrigSize = frameSize;
-        origFrame = {edgeBuffer, edgeBuffer, frameSize.x, frameSize.y};
-        imgSize = frameSize;
-        imgScale = 1;
-        imgScaledSize = frameSize;
-
-        setButtonSize();
-        updateSliders();
-    }
-
-    void setFrameSize() {
-        frameSize = {screenSize.x - edgeBuffer - sliderHeight - edgeBuffer,
-                     screenSize.y - edgeBuffer - sliderHeight - spacer - btnLoadHeight - spacer - edgeBuffer};
-    }
-
-    void setImageScale() {
-        if (img != nullptr) {
-            // scale is based off original uncarved size
-            float xScale = frameSize.x / imgOrigSize.x;
-            float yScale = frameSize.y / imgOrigSize.y;
-            imgScale = (xScale < yScale) ? xScale : yScale;
-
-            origFrame.width = imgOrigSize.x*imgScale;
-            origFrame.height = imgOrigSize.y*imgScale;
-
-            float x = edgeBuffer + (frameSize.x - origFrame.width) / 2.0f;
-            if (x<edgeBuffer) {x=edgeBuffer;}
-            origFrame.x = x;
-
-            float y = edgeBuffer + (frameSize.y - origFrame.height) / 2.0f;
-            if (y<edgeBuffer) {y=edgeBuffer;}
-            origFrame.y = y;
-
-            // imgPos is based off carved image
-            imgSize = {(float)img->width, (float)img->height};
-            imgScaledSize = {imgSize.x*imgScale, imgSize.y*imgScale};
-
-            imgPos = {origFrame.x, origFrame.y + origFrame.height - imgScaledSize.y};
-        }
-    }
-
-    void setButtonSize() {
-        rectBtnLoad = {((float)screenSize.x/2 - btnLoadWidth/2), (screenSize.y - edgeBuffer - btnLoadHeight), btnLoadWidth, btnLoadHeight};
-    }
-
-    void updateSliders() {
-        rectXSlider = {origFrame.x,
-                       edgeBuffer + frameSize.y,
-                       origFrame.width,
-                       sliderHeight};
-        rectYSlider = {edgeBuffer + frameSize.x,
-                       origFrame.y,
-                       sliderHeight,
-                       origFrame.height};
-    }
-
-    void updateScreenSize() {
-        screenSize = {(float)GetScreenWidth(), (float)GetScreenHeight()};
-        setFrameSize();
-        setImageScale();
-        setButtonSize();
-        updateSliders();
-    }
-
-}; // end UI_Size
-
-void ui_carve(UI_Size* ui, Image* origImage, Image* carvedImage, Texture2D* tex, bool* finished) {
+/** Called by UI to create carved images.
+ * 
+ * @ui: UI_Size object that contains info about current window
+ * @origImage: Original, 'uncarved' image
+ * @carvedImage: Carved image
+ * @finished: Used to check if thread is finished executing
+ */
+void ui_carve(UI_Size* ui, Image* origImage, Image* carvedImage, bool* finished) {
     if (ui->img != nullptr) {
         *finished = false;
 
@@ -456,22 +510,15 @@ void ui_carve(UI_Size* ui, Image* origImage, Image* carvedImage, Texture2D* tex,
 
         *carvedImage = tempImg;
         ui->img = carvedImage;
-        // ui->updateScreenSize();
-        // *tex = LoadTextureFromImage(*carvedImage);
 
         *finished = true;
     }
 } // end ui_carve()
 
-void threadSleep() {
-    printf("Starting to sleep...\n");
-    std::this_thread::sleep_for(std::chrono::seconds(2));
-    printf("Woke up!\n");
-}
-
+// taken from raygui example 'custom_sliders.c'
+float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *textBottom, float value, float minValue, float maxValue, int sliderHeight);
 
 int main(void) {
-
     /* UI *********************************************************************/
     float screenX = 1024;
     float screenY = 512;
@@ -499,9 +546,9 @@ int main(void) {
     SetWindowState(FLAG_WINDOW_RESIZABLE);
 
     // NOTE: Textures MUST be loaded after Window initialization (OpenGL context is required)
+    char imgFileName[512] = { 0 };
     Image origImage{};
     Image carvedImage{};
-    char imgFileName[512] = { 0 };
     Texture2D tex{};
 
     GuiWindowFileDialogState fileDialogState = InitGuiWindowFileDialog(GetWorkingDirectory());
@@ -512,23 +559,33 @@ int main(void) {
             ui.updateScreenSize();
         }
 
-        // check if new image file was loaded
+        // handle popup window
         if (fileDialogState.SelectFilePressed) {
-            // Load image file (if supported extension)
-            if (IsFileExtension(fileDialogState.fileNameText, ".png")) {
-                strcpy(imgFileName, TextFormat("%s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
-                UnloadImage(origImage);
-                UnloadTexture(tex);
-                
-                origImage = LoadImage(imgFileName);
-                ImageFormat(&origImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-                ui.img = &origImage;
-                ui.imgOrigSize = {(float)origImage.width, (float)origImage.height};
-                ui.updateScreenSize();
-                ui.xSlider = 1;
-                ui.ySlider = 1;
-                
-                tex = LoadTextureFromImage(origImage);
+            // save new file
+            if (fileDialogState.saveFileMode) {
+                if (IsFileExtension(fileDialogState.fileNameText, ".png")) {
+                    strcpy(imgFileName, TextFormat("%s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
+                    ExportImage(LoadImageFromTexture(tex), imgFileName);
+                }
+            }
+            // load image
+            else {
+                if (IsFileExtension(fileDialogState.fileNameText, ".png")) {
+                    strcpy(imgFileName, TextFormat("%s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
+                    UnloadImage(origImage);
+                    UnloadTexture(tex);
+                    
+                    origImage = LoadImage(imgFileName);
+                    ImageFormat(&origImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+
+                    ui.img = &origImage;
+                    ui.imgOrigSize = {(float)origImage.width, (float)origImage.height};
+                    ui.updateScreenSize();
+                    ui.xSlider = 1;
+                    ui.ySlider = 1;
+                    
+                    tex = LoadTextureFromImage(origImage);
+                }
             }
 
             fileDialogState.SelectFilePressed = false;
@@ -538,27 +595,32 @@ int main(void) {
         BeginDrawing();
             ClearBackground(clrBG);
 
-            // "Load" button
-            if (fileDialogState.windowActive) { GuiLock(); }
-
+            // draw "Load" button
             if (GuiButton(ui.rectBtnLoad, "Load Image")) {
                 fileDialogState.windowActive = true;
+                fileDialogState.saveFileMode = false;
             }
-            GuiUnlock();
+
+            // draw "Save" button
+            if (GuiButton(ui.rectBtnSave, "Save Image")) {
+                fileDialogState.windowActive = true;
+                fileDialogState.saveFileMode = true;
+            }
             
-            // x slider
+            // draw x slider
             GuiSetStyle(SLIDER, BASE_COLOR_PRESSED, intClrLine);
             GuiSetStyle(SLIDER, SLIDER_PADDING, 2);
             GuiSetStyle(SLIDER, SLIDER_WIDTH, ui.sliderWidth);
             if (GuiSlider(ui.rectXSlider, "", "", &ui.xSlider, 0, 1.0f)) { sliderChanged = true; }
 
-            // y slider
+            // draw y slider
             ui.ySlider = GuiVerticalSliderPro(ui.rectYSlider, "", "", ui.ySlider, 0.0f, 1.0f, ui.sliderWidth);
             if (prevY != ui.ySlider) {
                 sliderChanged = true;
                 prevY = ui.ySlider;
             }
 
+            // check if image needs to be updated
             if (finished) {
                 if (thread.joinable()) {
                     thread.join();
@@ -568,13 +630,12 @@ int main(void) {
 
                 if (sliderChanged) {
                     sliderChanged = false;
-                    thread = std::thread(ui_carve, &ui, &origImage, &carvedImage, &tex, &finished);
+                    thread = std::thread(ui_carve, &ui, &origImage, &carvedImage, &finished);
                 }
             }
 
-            // image frame
+            // draw image frame
             DrawRectangleLinesEx(ui.origFrame, lineThck, clrLine);
-            // DrawRectangleLines(ui.edgeBuffer, ui.edgeBuffer, ui.frameSize.x, ui.frameSize.y, RED);
 
             // draw image
             if (tex.width > 0) {
@@ -593,25 +654,12 @@ int main(void) {
                 if (!finished) {
                     DrawText("processing...", ui.origFrame.x, ui.origFrame.y + ui.origFrame.height + ui.sliderHeight + 2, 16, clrLine);
                 }
-
-                // DrawText(TextFormat("sliderChanged: %i", sliderChanged),    20, 20, 20, BLUE);
-                // DrawText(TextFormat("finished: %i", finished),              20, 40, 20, BLUE);
-
-                // DrawText(TextFormat("img.width: %i", ui.img->width),                    20, 40, 20, BLUE);
-                // DrawText(TextFormat("xScale : %f", ui.frameSize.x / ui.img->width),     20, 60, 20, BLUE);
-                // DrawText(TextFormat("frameSize.y: %1.f", ui.frameSize.y),               20, 80, 20, BLUE);
-                // DrawText(TextFormat("img.height: %i", ui.img->height),                  20, 100, 20, BLUE);
-                // DrawText(TextFormat("yScale : %f", ui.frameSize.y / ui.img->height),    20, 120, 20, BLUE);
-
-                // DrawText(TextFormat("imgScaleSize.x: %f", ui.imgScaledSize.x),          20, 140, 20, BLUE);
-                // DrawText(TextFormat("imgScaleSize.y: %f", ui.imgScaledSize.y),          20, 160, 20, BLUE);
-
             }
-
-
-            // GUI: Dialog Window
-            //--------------------------------------------------------------------------------
+            
+            // popup window
+            GuiUnlock();
             GuiWindowFileDialog(&fileDialogState);
+            if (fileDialogState.windowActive) { GuiLock(); }
 
         EndDrawing();
     }
@@ -623,9 +671,9 @@ int main(void) {
     CloseWindow();
 
     return 0;
-
 } // end main()
 
+// taken from raygui example 'custom_sliders.c'
 float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *textBottom, float value, float minValue, float maxValue, int sliderHeight)
 {
     GuiState state = (GuiState)GuiGetState();
