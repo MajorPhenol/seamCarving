@@ -14,6 +14,7 @@
 #include <cmath>
 #include <climits>
 #include <cfloat>
+#include <thread>
 
 float* energyArray(Color* colorArr, int height, int width) {
     float* floatArr = new float[height*width]{};
@@ -441,26 +442,41 @@ public:
 
 }; // end UI_Size
 
-void ui_carve(UI_Size* ui, Image* origImage, Image* carvedImage, Texture2D* tex) {
+void ui_carve(UI_Size* ui, Image* origImage, Image* carvedImage, Texture2D* tex, bool* finished) {
     if (ui->img != nullptr) {
+        *finished = false;
+
+        Image tempImg{};
+
         int xSeams = (int)( (1-ui->xSlider) * origImage->width);
-        *carvedImage = genImageCarved(origImage, xSeams, true);
+        tempImg = genImageCarved(origImage, xSeams, true);
 
         int ySeams = (int)( (1-ui->ySlider) * origImage->height);
-        *carvedImage = genImageCarved(carvedImage, ySeams, false);
+        tempImg = genImageCarved(&tempImg, ySeams, false);
 
+        *carvedImage = tempImg;
         ui->img = carvedImage;
-        ui->updateScreenSize();
-        *tex = LoadTextureFromImage(*carvedImage);
+        // ui->updateScreenSize();
+        // *tex = LoadTextureFromImage(*carvedImage);
+
+        *finished = true;
     }
 } // end ui_carve()
 
+void threadSleep() {
+    printf("Starting to sleep...\n");
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    printf("Woke up!\n");
+}
+
+
 int main(void) {
 
+    /* UI *********************************************************************/
     float screenX = 1024;
     float screenY = 512;
 
-    const Color clrBG{130, 130, 130, 255};
+    const Color clrBG{100, 100, 100, 255};
     const Color clrLine{145, 200, 210, 255};
     const unsigned int intClrLine = (clrLine.r << 24 |
                                      clrLine.g << 16 |
@@ -470,9 +486,13 @@ int main(void) {
     float lineThck = 2;
 
     UI_Size ui{screenX, screenY};
+    /**************************************************************************/
 
     float prevY = ui.ySlider;
     bool sliderChanged = false;
+
+    std::thread thread;
+    bool finished = true;   // to check if thread is done
 
     InitWindow((int)ui.screenSize.x, (int)ui.screenSize.y, "Seam Carving");
     SetTargetFPS(60);
@@ -539,16 +559,22 @@ int main(void) {
                 prevY = ui.ySlider;
             }
 
-            if (sliderChanged) {
-                GuiLock();
-                sliderChanged = false;
-                ui_carve(&ui, &origImage, &carvedImage, &tex);
-                GuiUnlock();
+            if (finished) {
+                if (thread.joinable()) {
+                    thread.join();
+                    ui.updateScreenSize();
+                    tex = LoadTextureFromImage(carvedImage);
+                }
+
+                if (sliderChanged) {
+                    sliderChanged = false;
+                    thread = std::thread(ui_carve, &ui, &origImage, &carvedImage, &tex, &finished);
+                }
             }
 
             // image frame
-            // DrawRectangleLines(ui.edgeBuffer, ui.edgeBuffer, ui.frameSize.x, ui.frameSize.y, RED);
             DrawRectangleLinesEx(ui.origFrame, lineThck, clrLine);
+            // DrawRectangleLines(ui.edgeBuffer, ui.edgeBuffer, ui.frameSize.x, ui.frameSize.y, RED);
 
             // draw image
             if (tex.width > 0) {
@@ -564,10 +590,12 @@ int main(void) {
                            1.0,
                            clrLine); 
 
-            
-                // DrawText(TextFormat("xSlider: %f", ui.xSlider),                            20, 20, 20, BLUE);
-                // DrawText(TextFormat("ySlider: %f", ui.ySlider),                            20, 40, 20, BLUE);
+                if (!finished) {
+                    DrawText("processing...", ui.origFrame.x, ui.origFrame.y + ui.origFrame.height + ui.sliderHeight + 2, 16, clrLine);
+                }
 
+                // DrawText(TextFormat("sliderChanged: %i", sliderChanged),    20, 20, 20, BLUE);
+                // DrawText(TextFormat("finished: %i", finished),              20, 40, 20, BLUE);
 
                 // DrawText(TextFormat("img.width: %i", ui.img->width),                    20, 40, 20, BLUE);
                 // DrawText(TextFormat("xScale : %f", ui.frameSize.x / ui.img->width),     20, 60, 20, BLUE);
