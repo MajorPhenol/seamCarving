@@ -23,7 +23,7 @@ Resize images without distorting important details.
 ### Notes
 
 - Currently only supports .png images.
-- The energy function used is $ e(I) = |\frac{\partial}{\partialx}I| + |\frac{\partial}{\partialy}I| $
+- The energy function used is $` e(I) = |\frac{\partial}{\partial x}I| + |\frac{\partial}{\partial y}I| `$
 
 ### Credits
 
