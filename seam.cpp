@@ -1,3 +1,4 @@
+#include "seam.h"
 #include <raylib.h> /* v6.0 */
 
 #define RAYGUI_IMPLEMENTATION
@@ -15,113 +16,160 @@
 #include <cfloat>
 #include <thread>
 
-class UI_Size {
-public:
-    Vector2 screenSize;     // window size
-    Vector2 frameSize;      // available region to display image
-    
-    Image* img = nullptr;
-    Vector2 imgOrigSize;    // full resolution image size before scaling and carving
-    Rectangle origFrame;  
-    Vector2 imgSize;        // full resolution image size after carving
-    Vector2 imgScaledSize;  // displayed image size
-    Vector2 imgPos;         // position of top left corner
-    float imgScale;
+int main(void) {
+    /* UI *********************************************************************/
+    float screenX = 1024;
+    float screenY = 512;
 
-    float edgeBuffer;       // blank space around window edge
-    float spacer;
+    const Color clrBG{100, 100, 100, 255};
+    const Color clrLine{145, 200, 210, 255};
+    const unsigned int intClrLine = (clrLine.r << 24 |
+                                     clrLine.g << 16 |
+                                     clrLine.b << 8  |
+                                     clrLine.a << 0);
 
-    float sliderHeight, sliderWidth;
-    float xSlider, ySlider;
-    Rectangle rectXSlider;
-    Rectangle rectYSlider;
-    
-    float btnHeight;
-    float btnWidth;
-    Rectangle rectBtnLoad;
-    Rectangle rectBtnSave;
+    float lineThck = 2;
 
-    UI_Size(float screenX, float screenY) {
-        screenSize.x = screenX;
-        screenSize.y = screenY;
+    UI_Size ui{screenX, screenY};
+    /**************************************************************************/
 
-        // default values
-        edgeBuffer = 10;
-        spacer = 5;
-        sliderHeight = 20;   // for xSlider
-        sliderWidth = 8;     // for ySlider
-        btnHeight = 30;
-        btnWidth = 100;
+    float prevY = ui.ySlider;
+    bool sliderChanged = false;
 
-        xSlider = 1.0f;
-        ySlider = 1.0f;
+    std::thread thread;
+    bool finished = true;   // to check if thread is done
 
-        setFrameSize();
-        imgOrigSize = frameSize;
-        origFrame = {edgeBuffer, edgeBuffer, frameSize.x, frameSize.y};
-        imgSize = frameSize;
-        imgScale = 1;
-        imgScaledSize = frameSize;
+    InitWindow((int)ui.screenSize.x, (int)ui.screenSize.y, "Seam Carving");
+    SetTargetFPS(60);
+    SetWindowState(FLAG_WINDOW_RESIZABLE);
 
-        setButtonSize();
-        updateSliders();
-    }
+    // NOTE: Textures MUST be loaded after Window initialization (OpenGL context is required)
+    char imgFileName[512] = { 0 };
+    Image origImage{};
+    Image carvedImage{};
+    Texture2D tex{};
 
-    void setFrameSize() {
-        frameSize = {screenSize.x - edgeBuffer - sliderHeight - edgeBuffer,
-                     screenSize.y - edgeBuffer - sliderHeight - spacer - btnHeight - spacer - edgeBuffer};
-    }
+    GuiWindowFileDialogState fileDialogState = InitGuiWindowFileDialog(GetWorkingDirectory());
 
-    void setImageScale() {
-        if (img != nullptr) {
-            // scale is based off original uncarved size
-            float xScale = frameSize.x / imgOrigSize.x;
-            float yScale = frameSize.y / imgOrigSize.y;
-            imgScale = (xScale < yScale) ? xScale : yScale;
-
-            origFrame.width = imgOrigSize.x*imgScale;
-            origFrame.height = imgOrigSize.y*imgScale;
-
-            float x = edgeBuffer + (frameSize.x - origFrame.width) / 2.0f;
-            if (x<edgeBuffer) {x=edgeBuffer;}
-            origFrame.x = x;
-
-            float y = edgeBuffer + (frameSize.y - origFrame.height) / 2.0f;
-            if (y<edgeBuffer) {y=edgeBuffer;}
-            origFrame.y = y;
-
-            // imgPos is based off carved image
-            imgSize = {(float)img->width, (float)img->height};
-            imgScaledSize = {imgSize.x*imgScale, imgSize.y*imgScale};
-
-            imgPos = {origFrame.x, origFrame.y + origFrame.height - imgScaledSize.y};
+    while (!WindowShouldClose()) {
+        // check if window was resized
+        if ((int)ui.screenSize.x != GetScreenWidth() || (int)ui.screenSize.y != GetScreenHeight()) {
+            ui.updateScreenSize();
         }
+
+        // handle popup window
+        if (fileDialogState.SelectFilePressed) {
+            // save new file
+            if (fileDialogState.saveFileMode) {
+                if (IsFileExtension(fileDialogState.fileNameText, ".png")) {
+                    strcpy(imgFileName, TextFormat("%s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
+                    ExportImage(LoadImageFromTexture(tex), imgFileName);
+                }
+            }
+            // load image
+            else {
+                if (IsFileExtension(fileDialogState.fileNameText, ".png")) {
+                    strcpy(imgFileName, TextFormat("%s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
+                    UnloadImage(origImage);
+                    UnloadTexture(tex);
+                    
+                    origImage = LoadImage(imgFileName);
+                    ImageFormat(&origImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+
+                    ui.img = &origImage;
+                    ui.imgOrigSize = {(float)origImage.width, (float)origImage.height};
+                    ui.updateScreenSize();
+                    ui.xSlider = 1;
+                    ui.ySlider = 1;
+                    
+                    tex = LoadTextureFromImage(origImage);
+                }
+            }
+
+            fileDialogState.SelectFilePressed = false;
+        }
+
+        /* Draw *************************************************************/
+        BeginDrawing();
+            ClearBackground(clrBG);
+
+            // draw "Load" button
+            if (GuiButton(ui.rectBtnLoad, "Load Image")) {
+                fileDialogState.windowActive = true;
+                fileDialogState.saveFileMode = false;
+            }
+
+            // draw "Save" button
+            if (GuiButton(ui.rectBtnSave, "Save Image")) {
+                fileDialogState.windowActive = true;
+                fileDialogState.saveFileMode = true;
+            }
+            
+            // draw x slider
+            GuiSetStyle(SLIDER, BASE_COLOR_PRESSED, intClrLine);
+            GuiSetStyle(SLIDER, SLIDER_PADDING, 2);
+            GuiSetStyle(SLIDER, SLIDER_WIDTH, ui.sliderWidth);
+            if (GuiSlider(ui.rectXSlider, "", "", &ui.xSlider, 0, 1.0f)) { sliderChanged = true; }
+
+            // draw y slider
+            ui.ySlider = GuiVerticalSliderPro(ui.rectYSlider, "", "", ui.ySlider, 0.0f, 1.0f, ui.sliderWidth);
+            if (prevY != ui.ySlider) {
+                sliderChanged = true;
+                prevY = ui.ySlider;
+            }
+
+            // check if image needs to be updated
+            if (finished) {
+                if (thread.joinable()) {
+                    thread.join();
+                    ui.updateScreenSize();
+                    tex = LoadTextureFromImage(carvedImage);
+                }
+
+                if (sliderChanged) {
+                    sliderChanged = false;
+                    thread = std::thread(ui_carve, &ui, &origImage, &carvedImage, &finished);
+                }
+            }
+
+            // draw image frame
+            DrawRectangleLinesEx(ui.origFrame, lineThck, clrLine);
+
+            // draw image
+            if (tex.width > 0) {
+                DrawTextureEx(tex, ui.imgPos, 0.0f, ui.imgScale, WHITE);
+
+                // draw lines from sliders around image
+                DrawLineEx({ui.origFrame.x + ui.imgScaledSize.x, ui.origFrame.y},
+                           {ui.origFrame.x + ui.imgScaledSize.x, ui.origFrame.y + ui.origFrame.height},
+                           1.0,
+                           clrLine);
+                DrawLineEx({ui.origFrame.x, ui.imgPos.y},
+                           {ui.origFrame.x + ui.origFrame.width, ui.imgPos.y},
+                           1.0,
+                           clrLine); 
+
+                if (!finished) {
+                    DrawText("processing...", ui.origFrame.x, ui.origFrame.y + ui.origFrame.height + ui.sliderHeight + 2, 16, clrLine);
+                }
+            }
+            
+            // popup window
+            GuiUnlock();
+            GuiWindowFileDialog(&fileDialogState);
+            if (fileDialogState.windowActive) { GuiLock(); }
+
+        EndDrawing();
     }
 
-    void setButtonSize() {
-        rectBtnLoad = {((float)screenSize.x/2 - btnWidth - spacer), (screenSize.y - edgeBuffer - btnHeight), btnWidth, btnHeight};
-        rectBtnSave = {((float)screenSize.x/2 + spacer), (screenSize.y - edgeBuffer - btnHeight), btnWidth, btnHeight};
-    }
+    // unload textures
+    UnloadImage(origImage);
+    UnloadTexture(tex);
 
-    void updateSliders() {
-        rectXSlider = {origFrame.x,
-                       edgeBuffer + frameSize.y,
-                       origFrame.width,
-                       sliderHeight};
-        rectYSlider = {edgeBuffer + frameSize.x,
-                       origFrame.y,
-                       sliderHeight,
-                       origFrame.height};
-    }
+    CloseWindow();
 
-    void updateScreenSize() {
-        screenSize = {(float)GetScreenWidth(), (float)GetScreenHeight()};
-        setFrameSize();
-        setImageScale();
-        setButtonSize();
-        updateSliders();
-    }
-}; // end UI_Size
+    return 0;
+} // end main()
 
 /** Creates an array of 'energy values' for an image.
  * 
@@ -514,164 +562,6 @@ void ui_carve(UI_Size* ui, Image* origImage, Image* carvedImage, bool* finished)
         *finished = true;
     }
 } // end ui_carve()
-
-// taken from raygui example 'custom_sliders.c'
-float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *textBottom, float value, float minValue, float maxValue, int sliderHeight);
-
-int main(void) {
-    /* UI *********************************************************************/
-    float screenX = 1024;
-    float screenY = 512;
-
-    const Color clrBG{100, 100, 100, 255};
-    const Color clrLine{145, 200, 210, 255};
-    const unsigned int intClrLine = (clrLine.r << 24 |
-                                     clrLine.g << 16 |
-                                     clrLine.b << 8  |
-                                     clrLine.a << 0);
-
-    float lineThck = 2;
-
-    UI_Size ui{screenX, screenY};
-    /**************************************************************************/
-
-    float prevY = ui.ySlider;
-    bool sliderChanged = false;
-
-    std::thread thread;
-    bool finished = true;   // to check if thread is done
-
-    InitWindow((int)ui.screenSize.x, (int)ui.screenSize.y, "Seam Carving");
-    SetTargetFPS(60);
-    SetWindowState(FLAG_WINDOW_RESIZABLE);
-
-    // NOTE: Textures MUST be loaded after Window initialization (OpenGL context is required)
-    char imgFileName[512] = { 0 };
-    Image origImage{};
-    Image carvedImage{};
-    Texture2D tex{};
-
-    GuiWindowFileDialogState fileDialogState = InitGuiWindowFileDialog(GetWorkingDirectory());
-
-    while (!WindowShouldClose()) {
-        // check if window was resized
-        if ((int)ui.screenSize.x != GetScreenWidth() || (int)ui.screenSize.y != GetScreenHeight()) {
-            ui.updateScreenSize();
-        }
-
-        // handle popup window
-        if (fileDialogState.SelectFilePressed) {
-            // save new file
-            if (fileDialogState.saveFileMode) {
-                if (IsFileExtension(fileDialogState.fileNameText, ".png")) {
-                    strcpy(imgFileName, TextFormat("%s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
-                    ExportImage(LoadImageFromTexture(tex), imgFileName);
-                }
-            }
-            // load image
-            else {
-                if (IsFileExtension(fileDialogState.fileNameText, ".png")) {
-                    strcpy(imgFileName, TextFormat("%s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
-                    UnloadImage(origImage);
-                    UnloadTexture(tex);
-                    
-                    origImage = LoadImage(imgFileName);
-                    ImageFormat(&origImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-
-                    ui.img = &origImage;
-                    ui.imgOrigSize = {(float)origImage.width, (float)origImage.height};
-                    ui.updateScreenSize();
-                    ui.xSlider = 1;
-                    ui.ySlider = 1;
-                    
-                    tex = LoadTextureFromImage(origImage);
-                }
-            }
-
-            fileDialogState.SelectFilePressed = false;
-        }
-
-        /* Draw *************************************************************/
-        BeginDrawing();
-            ClearBackground(clrBG);
-
-            // draw "Load" button
-            if (GuiButton(ui.rectBtnLoad, "Load Image")) {
-                fileDialogState.windowActive = true;
-                fileDialogState.saveFileMode = false;
-            }
-
-            // draw "Save" button
-            if (GuiButton(ui.rectBtnSave, "Save Image")) {
-                fileDialogState.windowActive = true;
-                fileDialogState.saveFileMode = true;
-            }
-            
-            // draw x slider
-            GuiSetStyle(SLIDER, BASE_COLOR_PRESSED, intClrLine);
-            GuiSetStyle(SLIDER, SLIDER_PADDING, 2);
-            GuiSetStyle(SLIDER, SLIDER_WIDTH, ui.sliderWidth);
-            if (GuiSlider(ui.rectXSlider, "", "", &ui.xSlider, 0, 1.0f)) { sliderChanged = true; }
-
-            // draw y slider
-            ui.ySlider = GuiVerticalSliderPro(ui.rectYSlider, "", "", ui.ySlider, 0.0f, 1.0f, ui.sliderWidth);
-            if (prevY != ui.ySlider) {
-                sliderChanged = true;
-                prevY = ui.ySlider;
-            }
-
-            // check if image needs to be updated
-            if (finished) {
-                if (thread.joinable()) {
-                    thread.join();
-                    ui.updateScreenSize();
-                    tex = LoadTextureFromImage(carvedImage);
-                }
-
-                if (sliderChanged) {
-                    sliderChanged = false;
-                    thread = std::thread(ui_carve, &ui, &origImage, &carvedImage, &finished);
-                }
-            }
-
-            // draw image frame
-            DrawRectangleLinesEx(ui.origFrame, lineThck, clrLine);
-
-            // draw image
-            if (tex.width > 0) {
-                DrawTextureEx(tex, ui.imgPos, 0.0f, ui.imgScale, WHITE);
-
-                // draw lines from sliders around image
-                DrawLineEx({ui.origFrame.x + ui.imgScaledSize.x, ui.origFrame.y},
-                           {ui.origFrame.x + ui.imgScaledSize.x, ui.origFrame.y + ui.origFrame.height},
-                           1.0,
-                           clrLine);
-                DrawLineEx({ui.origFrame.x, ui.imgPos.y},
-                           {ui.origFrame.x + ui.origFrame.width, ui.imgPos.y},
-                           1.0,
-                           clrLine); 
-
-                if (!finished) {
-                    DrawText("processing...", ui.origFrame.x, ui.origFrame.y + ui.origFrame.height + ui.sliderHeight + 2, 16, clrLine);
-                }
-            }
-            
-            // popup window
-            GuiUnlock();
-            GuiWindowFileDialog(&fileDialogState);
-            if (fileDialogState.windowActive) { GuiLock(); }
-
-        EndDrawing();
-    }
-
-    // unload textures
-    UnloadImage(origImage);
-    UnloadTexture(tex);
-
-    CloseWindow();
-
-    return 0;
-} // end main()
 
 // taken from raygui example 'custom_sliders.c'
 float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *textBottom, float value, float minValue, float maxValue, int sliderHeight)
