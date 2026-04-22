@@ -1,16 +1,17 @@
 #include <raylib.h>
+#include <vector>
 
 class UI_Size {
 public:
     Vector2 screenSize;     // window size
     Vector2 frameSize;      // available region to display image
     
-    Image* img = nullptr;
-    Vector2 imgOrigSize;    // full resolution image size before scaling and carving
+    Image* img = nullptr;   // carved image
+    Vector2 imgOrigSize;    // wxh full resolution image size before scaling and carving
     Rectangle origFrame;  
-    Vector2 imgSize;        // full resolution image size after carving
-    Vector2 imgScaledSize;  // displayed image size
-    Vector2 imgPos;         // position of top left corner
+    Vector2 imgSize;        // wxh full resolution image size after carving
+    Vector2 imgScaledSize;  // wxh displayed image size
+    Vector2 imgPos;         // (x,y) position of top left corner
     float imgScale;
 
     float edgeBuffer;       // blank space around window edge
@@ -108,19 +109,17 @@ public:
     }
 }; // end UI_Size
 
-float* energyArray(Color* colorArr, int height, int width);
+std::vector<float> energyArray(std::vector<Color>& colorArr, int height, int width);
+
+std::vector<int> minIndex(std::vector<float>& floatArr, int height, int width, bool xDir);
+
+std::vector<Color> removeSeam(std::vector<Color>& colorArr, int height, int width, bool xDir);
+
+void ui_carve(UI_Size& ui, Image& origImage, Image& carvedImage, std::vector<Color>& colorVec, bool& finished);
 
 Image genImageEnergy(Image* img_input, bool outputFloat, bool grayscale);
 
-int* minIndex(float* floatArr, int height, int width, bool xDir);
-
 Image genImageSeam(Image* img_input, bool xDir, bool outputEnergy);
-
-Color* removeSeam(Color* colorArr, int height, int width, bool xDir);
-
-Image genImageCarved(Image* img_input, int seams, bool xDir);
-
-void ui_carve(UI_Size* ui, Image* origImage, Image* carvedImage, bool* finished);
 
 // taken from raygui example 'custom_sliders.c'
 float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *textBottom, float value, float minValue, float maxValue, int sliderHeight);

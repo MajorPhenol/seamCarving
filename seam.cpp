@@ -15,6 +15,7 @@
 #include <climits>
 #include <cfloat>
 #include <thread>
+#include <vector>
 
 int main(void) {
     /* UI *********************************************************************/
@@ -47,6 +48,8 @@ int main(void) {
     char imgFileName[512] = { 0 };
     Image origImage{};
     Image carvedImage{};
+    std::vector<Color> colorVec;
+    // carvedImage.data = colorVec.data();
     Texture2D tex{};
 
     GuiWindowFileDialogState fileDialogState = InitGuiWindowFileDialog(GetWorkingDirectory());
@@ -76,7 +79,8 @@ int main(void) {
                     origImage = LoadImage(imgFileName);
                     ImageFormat(&origImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 
-                    ui.img = &origImage;
+                    carvedImage = origImage;
+                    ui.img = &carvedImage;
                     ui.imgOrigSize = {(float)origImage.width, (float)origImage.height};
                     ui.updateScreenSize();
                     ui.xSlider = 1;
@@ -128,7 +132,7 @@ int main(void) {
 
                 if (sliderChanged) {
                     sliderChanged = false;
-                    thread = std::thread(ui_carve, &ui, &origImage, &carvedImage, &finished);
+                    thread = std::thread(ui_carve, std::ref(ui), std::ref(origImage), std::ref(carvedImage), std::ref(colorVec), std::ref(finished));
                 }
             }
 
@@ -164,6 +168,7 @@ int main(void) {
 
     // unload textures
     UnloadImage(origImage);
+    UnloadImage(carvedImage);
     UnloadTexture(tex);
 
     CloseWindow();
@@ -178,27 +183,16 @@ int main(void) {
  * @width: Image width
  * @return: [height x width] array of energy values
  */
-float* energyArray(Color* colorArr, int height, int width) {
-    float* floatArr = new float[height*width]{};
+std::vector<float> energyArray(std::vector<Color>& colorArr, int height, int width) {
+    std::vector<float> energyArr(height*width);
 
     Color clrCenter, clrDown, clrRight;
-    float energy, dx, dy;
+    float dx, dy;
     float dR, dG, dB;
 
     // image pixels loop
-    for (int y=0; y<height; y++){
-        for (int x=0; x<width; x++){
-
-            // handle bottom row of image
-            if (y == height-1) {
-                floatArr[y*width + x] = floatArr[(y-1)*width + x];
-                continue;
-            }
-            // handle right edge of image
-            if (x == width-1) {
-                floatArr[y*width + x] = floatArr[y*width + x - 1];
-                continue;
-            }
+    for (int y=0; y<height-1; y++){
+        for (int x=0; x<width-1; x++){
 
             clrCenter = colorArr[y*width + x];
             clrRight = colorArr[y*width + x + 1];
@@ -215,102 +209,39 @@ float* energyArray(Color* colorArr, int height, int width) {
             dB = clrCenter.b - clrDown.b;
             dy = sqrt((dR*dR) + (dG*dG) + (dB*dB));
 
-            energy = std::abs(dx) + std::abs(dy);
-            floatArr[y*width + x] = energy;
+            // energy = dx + dy
+            energyArr[y*width + x] = dx + dy;
         }
     }
 
-    return floatArr;
+    // handle bottom row of image
+    for (int x=0; x<width; x++) {
+        energyArr[(height-1)*width + x] = energyArr[((height-2))*width + x];
+    }
+
+    // handle right edge of image
+    for (int y=0; y<height-1; y++) {
+        energyArr[y*width + width - 1] = energyArr[y*width + width - 2];
+    }
+
+    return energyArr;
 } // end energyArray()
-
-/** Generates an Image showing pixel 'energy values'
- * 
- * @img_input: Original image
- * @outputFloat: If true, the output image will use raw 32bit energy values.
- * @grayscale: If true, the output image will be 8bit grayscale,
- *              else the image will be in R8G8B8A8 format.
- * @return: New Image
- */
-Image genImageEnergy(Image* img_input, bool outputFloat, bool grayscale){
-    if (img_input->format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8){
-        printf("[ERROR] wrong pixel format: %i\n", img_input->format);
-        return Image{};
-    }
-
-    int height = img_input->height;
-    int width = img_input->width;
-
-    Color* colorArr = (Color*)img_input->data;
-    float* floatArr = energyArray(colorArr, height, width);
-
-    // return raw float energy values
-    if (outputFloat == true){
-        return Image{(void*)floatArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R32};
-    }
-
-    float max = 0;
-    float min = FLT_MAX;
-
-    for (int y=0; y<height; y++){
-        for (int x=0; x<width; x++){
-            if (floatArr[y*width + x] > max) {max = floatArr[y*width + x];}
-            if (floatArr[y*width + x] < min) {min = floatArr[y*width + x];}
-        }
-    }
-
-    float range = max - min;
-
-    if (grayscale == true) {   /* return grayscale image */
-        uint8_t* outArr = new uint8_t[height*width]{};
-
-        for (int y=0; y<height; y++){
-            for (int x=0; x<width; x++){
-                // normalize pixel value
-                outArr[y*width + x] = (uint8_t)( (floatArr[y*width + x]-min) / range * 255 );
-            }
-        }
-
-        return Image{(void*)outArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE};
-    }
-
-    else {  /* convert float to range of colors */
-        float pixel;
-        Color clrOut;
-        Color* outArr = new Color[height*width]{};
-
-        for (int y=0; y<height; y++){
-            for (int x=0; x<width; x++){
-                // normalize pixel value
-                pixel = (floatArr[y*width + x] - min) / range;
-                // convert to blue-red range
-                clrOut.r = 255 * pixel;
-                clrOut.g = 0;
-                clrOut.b = 127 * (1 - pixel);
-                clrOut.a = 255;
-
-                outArr[y*width + x] = clrOut;
-            }
-        }
-
-        return Image{(void*)outArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-    }
-} // genImageEnergy()
 
 /** Creates an array of minimum energy pixel indices to remove.
  * 
- * @floatArr: array of energy values from energyArray()
+ * @energyArr: array of energy values from energyArray()
  * @height: Image height
  * @width: Image width
  * @xDir: If true, shrink image horizontally,
  *          else shrink image vertically
  * @return: array of pixel indices
  */
-int* minIndex(float* floatArr, int height, int width, bool xDir){
-    float* seamArr = floatArr;
-    int* index;
+std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, bool xDir){
+    std::vector<float> seamArr = energyArr;
+    std::vector<int> index;
 
     if (xDir) {
-        index = new int[height]{};
+        index.resize(height);
 
         // find seam of cumulative min values
         for (int y=1; y<height; y++) {
@@ -361,7 +292,7 @@ int* minIndex(float* floatArr, int height, int width, bool xDir){
         }
     }
     else {
-        index = new int[width]{};
+        index.resize(width);
 
         // find seam of cumulative min values
         for (int x=1; x<width; x++) {
@@ -414,47 +345,6 @@ int* minIndex(float* floatArr, int height, int width, bool xDir){
     return index;
 } // end minIndex()
 
-/** Generate an Image showing the seam of lowest energy.
- * 
- * @img_input: Original image
- * @xDir: If true, shrink image horizontally,
- *          else shrink image vertically
- * @outputEnergy: If true, overlay the seam on energy values,
- *                  else overlay seam on original image
- * @return: New Image
- */
-Image genImageSeam(Image* img_input, bool xDir, bool outputEnergy) {
-    int height = img_input->height;
-    int width = img_input->width;
-
-    float* energyArr = energyArray((Color*)img_input->data, height, width);
-    int* seamIndex = minIndex(energyArr, height, width, xDir);
-
-    Color* colorArr;
-    if (outputEnergy) { /* overlay seam on energy image */
-        Image colorImg = genImageEnergy(img_input, false, false);
-        colorArr = (Color*)colorImg.data;
-    }
-    else { /* overlay seam on original image */
-        colorArr = (Color*)img_input->data;
-    }
-
-    Color seamColor = Color{0, 255, 0, 255};
-
-    if (xDir) {
-        for (int i=0; i<height; i++) {
-            colorArr[i*width + seamIndex[i]] = seamColor;
-        }
-    }
-    else {
-        for (int i=0; i<width; i++) {
-            colorArr[seamIndex[i]*width + i] = seamColor;
-        }
-    }
-
-    return Image{(void*)colorArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-} // end genImageSeam()
-
 /** Removes seams of lowest energy from image.
  *
  * @colorArr: Array of pixels from Image.data
@@ -464,9 +354,9 @@ Image genImageSeam(Image* img_input, bool xDir, bool outputEnergy) {
  *          else shrink image vertically
  * @return: Array of pixel colors
  */
-Color* removeSeam(Color* colorArr, int height, int width, bool xDir) {
-    float* energyArr = energyArray(colorArr, height, width);
-    int* seamIndex = minIndex(energyArr, height, width, xDir);
+std::vector<Color> removeSeam(std::vector<Color>& colorArr, int height, int width, bool xDir) {
+    std::vector<float> energyArr = energyArray(colorArr, height, width);
+    std::vector<int> seamIndex = minIndex(energyArr, height, width, xDir);
 
     int newHeight, newWidth;
     
@@ -479,9 +369,9 @@ Color* removeSeam(Color* colorArr, int height, int width, bool xDir) {
         newWidth = width;
     }
 
-    Color* newColorArr = new Color[newHeight*newWidth]{};
+    std::vector<Color> newColorArr(newHeight*newWidth);
 
-    if (xDir) { /* shrink horizontally */
+    if (xDir) { // shrink horizontally
         for (int y=0; y<height; y++) {
             int x_new = 0;
             for (int x=0; x<width; x++) {
@@ -495,7 +385,7 @@ Color* removeSeam(Color* colorArr, int height, int width, bool xDir) {
             }
         }
     }
-    else { /* shrink vertically */
+    else { // shrink vertically
         for (int x=0; x<width; x++) {
             int y_new = 0;
             for (int y=0; y<height; y++) {
@@ -513,55 +403,165 @@ Color* removeSeam(Color* colorArr, int height, int width, bool xDir) {
     return newColorArr;
 } // end removeSeam()
 
-/** Generate Image with removed seams
- * 
- * @img_input: Original image
- * @seams: number of seams to remove
- * @xDir: If true, shrink image horizontally,
- *          else shrink image vertically
- * @return: New Image
- */
-Image genImageCarved(Image* img_input, int seams, bool xDir) {
-    int height = img_input->height;
-    int width = img_input->width;
-
-    Color* colorArr = (Color*)img_input->data;
-
-    for (int i=0; i<seams; i++) {
-        colorArr = removeSeam(colorArr, height, width, xDir);
-
-        if (xDir) {width--;}
-        else {height--;}
-    }
-
-    return Image{(void*)colorArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
-} // end genImageCarved()
-
 /** Called by UI to create carved images.
  * 
  * @ui: UI_Size object that contains info about current window
  * @origImage: Original, 'uncarved' image
  * @carvedImage: Carved image
+ * @colorVec: Global vector to hold carved image color data
  * @finished: Used to check if thread is finished executing
  */
-void ui_carve(UI_Size* ui, Image* origImage, Image* carvedImage, bool* finished) {
-    if (ui->img != nullptr) {
-        *finished = false;
+void ui_carve(UI_Size& ui, Image& origImage, Image& carvedImage, std::vector<Color>& colorVec, bool& finished) {
+    finished = false;
 
-        Image tempImg{};
+    int height = origImage.height;
+    int width = origImage.width;
 
-        int xSeams = (int)( (1-ui->xSlider) * origImage->width);
-        tempImg = genImageCarved(origImage, xSeams, true);
+    int xSeams = (int)( (1-ui.xSlider) * width);
+    int ySeams = (int)( (1-ui.ySlider) * height);
 
-        int ySeams = (int)( (1-ui->ySlider) * origImage->height);
-        tempImg = genImageCarved(&tempImg, ySeams, false);
+    Color* cast = (Color*)origImage.data;
+    std::vector<Color> tempColor(cast, cast + (height*width));
 
-        *carvedImage = tempImg;
-        ui->img = carvedImage;
-
-        *finished = true;
+    for (int x=0; x<xSeams; x++) {
+        tempColor = removeSeam(tempColor, height, width, true);
+        width--;
     }
+    for (int y=0; y<ySeams; y++) {
+        tempColor = removeSeam(tempColor, height, width, false);
+        height--;
+    }
+
+    colorVec = tempColor;
+
+    carvedImage.data = (void*)colorVec.data();
+    carvedImage.width = width;
+    carvedImage.height = height;
+    carvedImage.mipmaps = 1;
+    carvedImage.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+
+    finished = true;
 } // end ui_carve()
+
+/** Generates an Image showing pixel 'energy values'
+ * 
+ * @img_input: Original image
+ * @outputFloat: If true, the output image will use raw 32bit energy values.
+ * @grayscale: If true, the output image will be 8bit grayscale,
+ *              else the image will be in R8G8B8A8 format.
+ * @return: New Image
+ */
+Image genImageEnergy(Image* img_input, bool outputFloat, bool grayscale){
+/*
+    if (img_input->format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8){
+        printf("[ERROR] wrong pixel format: %i\n", img_input->format);
+        return Image{};
+    }
+
+    int height = img_input->height;
+    int width = img_input->width;
+
+    Color* colorArr = (Color*)img_input->data;
+    std::vector<float> floatArr = energyArray(colorArr, height, width);
+
+    // return raw float energy values
+    if (outputFloat == true){
+        return Image{(void*)floatArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R32};
+    }
+
+    float max = 0;
+    float min = FLT_MAX;
+
+    for (int y=0; y<height; y++){
+        for (int x=0; x<width; x++){
+            if (floatArr[y*width + x] > max) {max = floatArr[y*width + x];}
+            if (floatArr[y*width + x] < min) {min = floatArr[y*width + x];}
+        }
+    }
+
+    float range = max - min;
+
+    if (grayscale == true) {   // return grayscale image
+        uint8_t* outArr = new uint8_t[height*width]{};
+
+        for (int y=0; y<height; y++){
+            for (int x=0; x<width; x++){
+                // normalize pixel value
+                outArr[y*width + x] = (uint8_t)( (floatArr[y*width + x]-min) / range * 255 );
+            }
+        }
+
+        return Image{(void*)outArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_GRAYSCALE};
+    }
+
+    else {  // convert float to range of colors
+        float pixel;
+        Color clrOut;
+        Color* outArr = new Color[height*width]{};
+
+        for (int y=0; y<height; y++){
+            for (int x=0; x<width; x++){
+                // normalize pixel value
+                pixel = (floatArr[y*width + x] - min) / range;
+                // convert to blue-red range
+                clrOut.r = 255 * pixel;
+                clrOut.g = 0;
+                clrOut.b = 127 * (1 - pixel);
+                clrOut.a = 255;
+
+                outArr[y*width + x] = clrOut;
+            }
+        }
+
+        return Image{(void*)outArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+    }
+*/
+    return Image{};
+} // genImageEnergy()
+
+/** Generate an Image showing the seam of lowest energy.
+ * 
+ * @img_input: Original image
+ * @xDir: If true, shrink image horizontally,
+ *          else shrink image vertically
+ * @outputEnergy: If true, overlay the seam on energy values,
+ *                  else overlay seam on original image
+ * @return: New Image
+ */
+Image genImageSeam(Image* img_input, bool xDir, bool outputEnergy) {
+/*
+    int height = img_input->height;
+    int width = img_input->width;
+
+    float* energyArr = energyArray((Color*)img_input->data, height, width);
+    int* seamIndex = minIndex(energyArr, height, width, xDir);
+
+    Color* colorArr;
+    if (outputEnergy) { // overlay seam on energy image
+        Image colorImg = genImageEnergy(img_input, false, false);
+        colorArr = (Color*)colorImg.data;
+    }
+    else { // overlay seam on original image
+        colorArr = (Color*)img_input->data;
+    }
+
+    Color seamColor = Color{0, 255, 0, 255};
+
+    if (xDir) {
+        for (int i=0; i<height; i++) {
+            colorArr[i*width + seamIndex[i]] = seamColor;
+        }
+    }
+    else {
+        for (int i=0; i<width; i++) {
+            colorArr[seamIndex[i]*width + i] = seamColor;
+        }
+    }
+
+    return Image{(void*)colorArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
+*/
+    return Image{};
+} // end genImageSeam()
 
 // taken from raygui example 'custom_sliders.c'
 float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *textBottom, float value, float minValue, float maxValue, int sliderHeight)

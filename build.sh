@@ -18,7 +18,8 @@ for opt in "$@"; do
     if [[ "$opt" == "run" ]]; then
         options="&& ./$2"
     elif [[ "$opt" == "debug" ]]; then
-        optimize="-g -o0"
+        optimize="-g -O0"
+        options="-fno-inline"
     fi
 done
 
