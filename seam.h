@@ -113,7 +113,7 @@ std::vector<float> energyArray(std::vector<Color>& colorArr, int height, int wid
 
 std::vector<int> minIndex(std::vector<float>& floatArr, int height, int width, bool xDir);
 
-std::vector<Color> removeSeam(std::vector<Color>& colorArr, int height, int width, bool xDir);
+std::vector<Color> removeSeam(std::vector<Color>& colorArr, int height, int width, bool xDir, bool needsCache);
 
 void ui_carve(UI_Size& ui, Image& origImage, Image& carvedImage, std::vector<Color>& colorVec, bool& finished);
 

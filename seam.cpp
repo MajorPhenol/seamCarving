@@ -1,12 +1,9 @@
 #include "seam.h"
-#include <raylib.h> /* v6.0 */
 
+#include <raylib.h> /* v6.0 */
 #define RAYGUI_IMPLEMENTATION
 #include <raygui.h> /* v5.0 */
 #undef RAYGUI_IMPLEMENTATION    // Avoid including raygui implementation again
-
-#define GUI_WINDOW_FILE_DIALOG_IMPLEMENTATION
-#include "gui_window_file_dialog.h"
 
 #include <cstddef>
 #include <cstdio>
@@ -16,6 +13,18 @@
 #include <cfloat>
 #include <thread>
 #include <vector>
+#include <chrono>
+
+#define GUI_WINDOW_FILE_DIALOG_IMPLEMENTATION
+#include "gui_window_file_dialog.h"
+
+/* Global Variables ***********************************************************/
+// store cached carved images
+int n_cacheX = 20;  // number of cached values in x and y directions
+int xStep;          // pixel distance between cached values
+int residueX;       // used to align vector index to bottom right of image
+std::vector<std::vector<Color>> cacheVec(n_cacheX);
+/******************************************************************************/
 
 int main(void) {
     /* UI *********************************************************************/
@@ -32,10 +41,10 @@ int main(void) {
     float lineThck = 2;
 
     UI_Size ui{screenX, screenY};
-    /**************************************************************************/
 
     float prevY = ui.ySlider;
     bool sliderChanged = false;
+    /**************************************************************************/
 
     std::thread thread;
     bool finished = true;   // to check if thread is done
@@ -49,7 +58,6 @@ int main(void) {
     Image origImage{};
     Image carvedImage{};
     std::vector<Color> colorVec;
-    // carvedImage.data = colorVec.data();
     Texture2D tex{};
 
     GuiWindowFileDialogState fileDialogState = InitGuiWindowFileDialog(GetWorkingDirectory());
@@ -68,16 +76,18 @@ int main(void) {
                     strcpy(imgFileName, TextFormat("%s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
                     ExportImage(LoadImageFromTexture(tex), imgFileName);
                 }
-            }
-            // load image
-            else {
+            } else {  // load image
                 if (IsFileExtension(fileDialogState.fileNameText, ".png")) {
                     strcpy(imgFileName, TextFormat("%s" PATH_SEPERATOR "%s", fileDialogState.dirPathText, fileDialogState.fileNameText));
                     UnloadImage(origImage);
                     UnloadTexture(tex);
-                    
+                   
                     origImage = LoadImage(imgFileName);
                     ImageFormat(&origImage, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+                    xStep = origImage.width / n_cacheX;
+                    residueX = origImage.width%xStep;
+                    for (int i=0; i < (int)cacheVec.capacity(); i++) { cacheVec[i].clear(); }
+                    cacheVec.clear();
 
                     carvedImage = origImage;
                     ui.img = &carvedImage;
@@ -85,7 +95,7 @@ int main(void) {
                     ui.updateScreenSize();
                     ui.xSlider = 1;
                     ui.ySlider = 1;
-                    
+
                     tex = LoadTextureFromImage(origImage);
                 }
             }
@@ -108,7 +118,7 @@ int main(void) {
                 fileDialogState.windowActive = true;
                 fileDialogState.saveFileMode = true;
             }
-            
+
             // draw x slider
             GuiSetStyle(SLIDER, BASE_COLOR_PRESSED, intClrLine);
             GuiSetStyle(SLIDER, SLIDER_PADDING, 2);
@@ -151,13 +161,13 @@ int main(void) {
                 DrawLineEx({ui.origFrame.x, ui.imgPos.y},
                            {ui.origFrame.x + ui.origFrame.width, ui.imgPos.y},
                            1.0,
-                           clrLine); 
+                           clrLine);
 
                 if (!finished) {
                     DrawText("processing...", ui.origFrame.x, ui.origFrame.y + ui.origFrame.height + ui.sliderHeight + 2, 16, clrLine);
                 }
             }
-            
+
             // popup window
             GuiUnlock();
             GuiWindowFileDialog(&fileDialogState);
@@ -167,14 +177,14 @@ int main(void) {
     }
 
     // unload textures
-    UnloadImage(origImage);
-    UnloadImage(carvedImage);
-    UnloadTexture(tex);
+    // UnloadImage(origImage);
+    // UnloadImage(carvedImage);
+    // UnloadTexture(tex);
 
     CloseWindow();
 
     return 0;
-} // end main()
+}  // end main()
 
 /** Creates an array of 'energy values' for an image.
  * 
@@ -191,9 +201,8 @@ std::vector<float> energyArray(std::vector<Color>& colorArr, int height, int wid
     float dR, dG, dB;
 
     // image pixels loop
-    for (int y=0; y<height-1; y++){
-        for (int x=0; x<width-1; x++){
-
+    for (int y=0; y < height-1; y++) {
+        for (int x=0; x < width-1; x++) {
             clrCenter = colorArr[y*width + x];
             clrRight = colorArr[y*width + x + 1];
 
@@ -215,17 +224,17 @@ std::vector<float> energyArray(std::vector<Color>& colorArr, int height, int wid
     }
 
     // handle bottom row of image
-    for (int x=0; x<width; x++) {
+    for (int x=0; x < width; x++) {
         energyArr[(height-1)*width + x] = energyArr[((height-2))*width + x];
     }
 
     // handle right edge of image
-    for (int y=0; y<height-1; y++) {
+    for (int y=0; y < height-1; y++) {
         energyArr[y*width + width - 1] = energyArr[y*width + width - 2];
     }
 
     return energyArr;
-} // end energyArray()
+}  // end energyArray()
 
 /** Creates an array of minimum energy pixel indices to remove.
  * 
@@ -236,7 +245,7 @@ std::vector<float> energyArray(std::vector<Color>& colorArr, int height, int wid
  *          else shrink image vertically
  * @return: array of pixel indices
  */
-std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, bool xDir){
+std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, bool xDir) {
     std::vector<float> seamArr = energyArr;
     std::vector<int> index;
 
@@ -244,17 +253,15 @@ std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, 
         index.resize(height);
 
         // find seam of cumulative min values
-        for (int y=1; y<height; y++) {
-            for (int x=0; x<width; x++) {
-                if (x==0 ) {
+        for (int y=1; y < height; y++) {
+            for (int x=0; x < width; x++) {
+                if (x == 0) {
                     seamArr[y*width + x] += std::fmin(seamArr[(y-1)*width + x],
                                                          seamArr[(y-1)*width + x + 1]);
-                }
-                else if (x==width-1) {
+                } else if (x == width-1) {
                     seamArr[y*width + x] += std::fmin(seamArr[(y-1)*width + x - 1],
                                                          seamArr[(y-1)*width + x]);
-                }
-                else {
+                } else {
                     seamArr[y*width + x] += std::fmin(
                                                 std::fmin(seamArr[(y-1)*width + x - 1],
                                                           seamArr[(y-1)*width + x]),
@@ -267,7 +274,7 @@ std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, 
         int x_min = 0;
         float minBottom = FLT_MAX;
 
-        for (int x=0; x<width; x++) {
+        for (int x=0; x < width; x++) {
             if (seamArr[(height-1)*width + x] < minBottom) {
                 minBottom = seamArr[(height-1)*width + x];
                 x_min = x;
@@ -276,36 +283,31 @@ std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, 
 
         index[height-1] = x_min;
 
-        for (int y=height-2; y>=0; y--) {
-            if (x_min==0 ) {
+        for (int y=height-2; y >= 0; y--) {
+            if (x_min == 0) {
                 x_min = seamArr[y*width + x_min] < seamArr[y*width + x_min + 1] ? x_min : x_min+1;
-            }
-            else if (x_min==width-1) {
+            } else if (x_min == width-1) {
                 x_min = seamArr[y*width + x_min - 1] < seamArr[y*width + x_min] ? x_min-1 : x_min;
-            }
-            else {
+            } else {
                 x_min = seamArr[y*width + x_min - 1] < seamArr[y*width + x_min] ? x_min-1 : x_min;
                 x_min = seamArr[y*width + x_min] < seamArr[y*width + x_min + 1] ? x_min : x_min+1;
             }
 
             index[y] = x_min;
         }
-    }
-    else {
+    } else {
         index.resize(width);
 
         // find seam of cumulative min values
-        for (int x=1; x<width; x++) {
-            for (int y=0; y<height; y++) {
-                if (y==0 ) {
+        for (int x=1; x < width; x++) {
+            for (int y=0; y < height; y++) {
+                if (y == 0) {
                     seamArr[y*width + x] += std::fmin(seamArr[(y)*width + x - 1],
                                                       seamArr[(y+1)*width + x - 1]);
-                }
-                else if (y==height-1) {
+                } else if (y == height-1) {
                     seamArr[y*width + x] += std::fmin(seamArr[(y-1)*width + x - 1],
                                                       seamArr[(y)*width + x - 1]);
-                }
-                else {
+                } else {
                     seamArr[y*width + x] += std::fmin(
                                                 std::fmin(seamArr[(y-1)*width + x - 1],
                                                           seamArr[(y)*width + x - 1]),
@@ -317,7 +319,7 @@ std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, 
         int y_min = 0;
         float minRight = FLT_MAX;
 
-        for (int y=0; y<height; y++) {
+        for (int y=0; y < height; y++) {
             if (seamArr[(y)*width + (width - 1)] < minRight) {
                 minRight = seamArr[(y)*width + (width - 1)];
                 y_min = y;
@@ -326,14 +328,12 @@ std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, 
 
         index[width-1] = y_min;
 
-        for (int x=width-2; x>=0; x--) {
-            if (y_min==0 ) {
+        for (int x=width-2; x >= 0; x--) {
+            if (y_min == 0) {
                 y_min = seamArr[y_min*width + x] < seamArr[(y_min+1)*width + x] ? y_min : y_min+1;
-            }
-            else if (y_min==height-1) {
+            } else if (y_min == height-1) {
                 y_min = seamArr[(y_min-1)*width + x] < seamArr[y_min*width + x] ? y_min-1 : y_min;
-            }
-            else {
+            } else {
                 y_min = seamArr[(y_min-1)*width + x] < seamArr[y_min*width + x] ? y_min-1 : y_min;
                 y_min = seamArr[y_min*width + x] < seamArr[(y_min+1)*width + x] ? y_min : y_min+1;
             }
@@ -343,7 +343,7 @@ std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, 
     }
 
     return index;
-} // end minIndex()
+}  // end minIndex()
 
 /** Removes seams of lowest energy from image.
  *
@@ -354,45 +354,41 @@ std::vector<int> minIndex(std::vector<float>& energyArr, int height, int width, 
  *          else shrink image vertically
  * @return: Array of pixel colors
  */
-std::vector<Color> removeSeam(std::vector<Color>& colorArr, int height, int width, bool xDir) {
+std::vector<Color> removeSeam(std::vector<Color>& colorArr, int height, int width, bool xDir, bool needsCache) {
     std::vector<float> energyArr = energyArray(colorArr, height, width);
     std::vector<int> seamIndex = minIndex(energyArr, height, width, xDir);
 
     int newHeight, newWidth;
-    
-    if (xDir == true){
+
+    if (xDir == true) {
         newHeight = height;
         newWidth = width - 1;
-    }
-    else {
+    } else {
         newHeight = height -1;
         newWidth = width;
     }
 
     std::vector<Color> newColorArr(newHeight*newWidth);
 
-    if (xDir) { // shrink horizontally
-        for (int y=0; y<height; y++) {
+    if (xDir) {  // shrink horizontally
+        for (int y=0; y < height; y++) {
             int x_new = 0;
-            for (int x=0; x<width; x++) {
+            for (int x=0; x < width; x++) {
                 if (x == seamIndex[y]) {
                     continue;
-                }
-                else {
+                } else {
                     newColorArr[y*newWidth + x_new] = colorArr[y*width + x];
                     x_new++;
                 }
             }
         }
-    }
-    else { // shrink vertically
-        for (int x=0; x<width; x++) {
+    } else {  // shrink vertically
+        for (int x=0; x < width; x++) {
             int y_new = 0;
-            for (int y=0; y<height; y++) {
+            for (int y=0; y < height; y++) {
                 if (y == seamIndex[x]) {
                     continue;
-                }
-                else {
+                } else {
                     newColorArr[y_new*newWidth + x] = colorArr[y*width + x];
                     y_new++;
                 }
@@ -400,8 +396,15 @@ std::vector<Color> removeSeam(std::vector<Color>& colorArr, int height, int widt
         }
     }
 
+    if (needsCache) {
+        if (newWidth%xStep == residueX) {
+            int x = n_cacheX - newWidth/xStep;
+            cacheVec[x] = newColorArr;
+        }
+    }
+
     return newColorArr;
-} // end removeSeam()
+}  // end removeSeam()
 
 /** Called by UI to create carved images.
  * 
@@ -419,18 +422,46 @@ void ui_carve(UI_Size& ui, Image& origImage, Image& carvedImage, std::vector<Col
 
     int xSeams = (int)( (1-ui.xSlider) * width);
     int ySeams = (int)( (1-ui.ySlider) * height);
+    printf("[ui_carve] starting seams: %i, %i\n", xSeams, ySeams);
 
-    Color* cast = (Color*)origImage.data;
-    std::vector<Color> tempColor(cast, cast + (height*width));
+    std::vector<Color> tempColor;
+    // check cache
+    for (int x=xSeams/xStep; x >= 0; x--) {
+        if (!cacheVec[x].empty()) {
+            tempColor = cacheVec[x];
+            printf("[ui_carve] using cache[%i]\n", x);
 
-    for (int x=0; x<xSeams; x++) {
-        tempColor = removeSeam(tempColor, height, width, true);
+            width -= x*xStep;
+            xSeams -= x*xStep;
+
+            break;
+        }
+    }
+
+    if (tempColor.empty()) {
+        Color* cast = (Color*)origImage.data;
+        tempColor = std::vector<Color>(cast, cast + (height*width));
+        printf("[ui_carve] no cache\n");
+    }
+
+    printf("[ui_carve] actual seams: %i, %i\n", xSeams, ySeams);
+    bool needsCache;
+
+    std::chrono::time_point<std::chrono::steady_clock> time_begin { std::chrono::steady_clock::now() };
+
+    if (xSeams > xStep) {needsCache = true;} else {needsCache = false;}
+    for (int x=0; x < xSeams; x++) {
+        tempColor = removeSeam(tempColor, height, width, true, needsCache);
         width--;
     }
-    for (int y=0; y<ySeams; y++) {
-        tempColor = removeSeam(tempColor, height, width, false);
+
+    for (int y=0; y < ySeams; y++) {
+        tempColor = removeSeam(tempColor, height, width, false, false);
         height--;
     }
+
+    std::chrono::time_point<std::chrono::steady_clock> time_end { std::chrono::steady_clock::now() };
+    printf("[ui_carve] carve time: %f\n", std::chrono::duration_cast<std::chrono::duration<double, std::ratio<1> >>(time_end - time_begin).count());
 
     colorVec = tempColor;
 
@@ -441,7 +472,7 @@ void ui_carve(UI_Size& ui, Image& origImage, Image& carvedImage, std::vector<Col
     carvedImage.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
 
     finished = true;
-} // end ui_carve()
+}  // end ui_carve()
 
 /** Generates an Image showing pixel 'energy values'
  * 
@@ -451,7 +482,7 @@ void ui_carve(UI_Size& ui, Image& origImage, Image& carvedImage, std::vector<Col
  *              else the image will be in R8G8B8A8 format.
  * @return: New Image
  */
-Image genImageEnergy(Image* img_input, bool outputFloat, bool grayscale){
+Image genImageEnergy(Image* img_input, bool outputFloat, bool grayscale) {
 /*
     if (img_input->format != PIXELFORMAT_UNCOMPRESSED_R8G8B8A8){
         printf("[ERROR] wrong pixel format: %i\n", img_input->format);
@@ -517,7 +548,7 @@ Image genImageEnergy(Image* img_input, bool outputFloat, bool grayscale){
     }
 */
     return Image{};
-} // genImageEnergy()
+}  // genImageEnergy()
 
 /** Generate an Image showing the seam of lowest energy.
  * 
@@ -561,11 +592,10 @@ Image genImageSeam(Image* img_input, bool xDir, bool outputEnergy) {
     return Image{(void*)colorArr, width, height, 1, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8};
 */
     return Image{};
-} // end genImageSeam()
+}  // end genImageSeam()
 
 // taken from raygui example 'custom_sliders.c'
-float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *textBottom, float value, float minValue, float maxValue, int sliderHeight)
-{
+float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *textBottom, float value, float minValue, float maxValue, int sliderHeight) {
     GuiState state = (GuiState)GuiGetState();
 
     int sliderValue = (int)(((value - minValue)/(maxValue - minValue)) * (bounds.height - 2 * GuiGetStyle(SLIDER, BORDER_WIDTH)));
@@ -667,4 +697,4 @@ float GuiVerticalSliderPro(Rectangle bounds, const char *textTop, const char *te
     //--------------------------------------------------------------------
 
     return value;
-} // end GuiVerticalSliderPro()
+}  // end GuiVerticalSliderPro()
